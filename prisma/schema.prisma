@@ -1,0 +1,115 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+enum EventStatus {
+  draft
+  live
+  ended
+  album_processing
+  album_ready
+}
+
+enum MediaType {
+  photo
+  video
+}
+
+enum MediaStatus {
+  pending
+  approved
+  rejected
+}
+
+model Couple {
+  id        String   @id @default(uuid())
+  nome      String
+  email     String   @unique
+  senhaHash String   @map("senha_hash")
+  criado    DateTime @default(now()) @map("criado_em")
+  events    Event[]
+
+  @@map("couples")
+}
+
+model Event {
+  id             String      @id @default(uuid())
+  coupleId       String      @map("couple_id")
+  couple         Couple      @relation(fields: [coupleId], references: [id])
+  nomeEvento     String      @map("nome_evento")
+  dataCasamento  DateTime?   @map("data_casamento")
+  slugPublico    String      @unique @map("slug_publico")
+  status         EventStatus @default(draft)
+  moderacaoAtiva Boolean     @default(true) @map("moderacao_ativa")
+  criadoEm       DateTime    @default(now()) @map("criado_em")
+  encerradoEm    DateTime?   @map("encerrado_em")
+
+  guestSessions GuestSession[]
+  mediaPosts    MediaPost[]
+  album         Album?
+
+  @@map("events")
+}
+
+model GuestSession {
+  id            String   @id @default(uuid())
+  eventId       String   @map("event_id")
+  event         Event    @relation(fields: [eventId], references: [id])
+  nomeConvidado String?  @map("nome_convidado")
+  tokenSessao   String   @unique @map("token_sessao")
+  criadoEm      DateTime @default(now()) @map("criado_em")
+
+  mediaPosts MediaPost[]
+
+  @@map("guest_sessions")
+}
+
+model MediaPost {
+  id             String       @id @default(uuid())
+  eventId        String       @map("event_id")
+  event          Event        @relation(fields: [eventId], references: [id])
+  guestSessionId String       @map("guest_session_id")
+  guestSession   GuestSession @relation(fields: [guestSessionId], references: [id])
+
+  tipo         MediaType
+  storageKey   String    @map("storage_key")
+  storageUrl   String    @map("storage_url")
+  thumbnailUrl String?   @map("thumbnail_url")
+
+  musicaFonte       String? @map("musica_fonte")
+  musicaTrackId     String? @map("musica_track_id")
+  musicaTitulo      String? @map("musica_titulo")
+  musicaArtista     String? @map("musica_artista")
+  musicaPreviewUrl String? @map("musica_preview_url")
+
+  mensagemTexto String?     @map("mensagem_texto")
+  status        MediaStatus @default(pending)
+  ordemNoAlbum  Int?        @map("ordem_no_album")
+
+  criadoEm DateTime @default(now()) @map("criado_em")
+
+  @@index([eventId, status])
+  @@map("media_posts")
+}
+
+model Album {
+  id            String    @id @default(uuid())
+  eventId       String    @unique @map("event_id")
+  event         Event     @relation(fields: [eventId], references: [id])
+  videoFinalUrl String?   @map("video_final_url")
+  galeriaUrl    String?   @map("galeria_url")
+  status        String    @default("processing")
+  erro          String?
+  criadoEm      DateTime  @default(now()) @map("criado_em")
+  finalizadoEm  DateTime? @map("finalizado_em")
+
+  @@map("albums")
+}
