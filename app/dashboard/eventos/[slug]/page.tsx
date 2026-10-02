@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { QRCodeCanvas } from "qrcode.react";
 import { miniaturaFoto, miniaturaVideo } from "@/lib/cloudinary";
+
 interface Evento {
     id: string;
     nomeEvento: string;
@@ -152,13 +154,48 @@ export default function PainelEventoPage() {
         }
     }, [statusEvento, carregarMidias]);
 
+    async function moderar(id: string, novoStatus: "approved" | "rejected") {
+        const token = localStorage.getItem("token");
+        if (!token) {
+            router.push("/login");
+            return;
+        }
+
+        setModerandoId(id);
+        setErroMidias(null);
+        try {
+            const res = await fetch(`/api/media/${id}`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ status: novoStatus }),
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                setErroMidias(data.error || "Não foi possível atualizar a mídia.");
+                return;
+            }
+
+            setMidias((atual) => atual.filter((m) => m.id !== id));
+        } catch {
+            setErroMidias("Não foi possível conectar ao servidor.");
+        } finally {
+            setModerandoId(null);
+        }
+    }
+    // ---- Fim da moderação ----
+
+    // ---- Álbum ----
     const [album, setAlbum] = useState<Album | null>(null);
     const [gerandoAlbum, setGerandoAlbum] = useState(false);
     const [erroAlbum, setErroAlbum] = useState<string | null>(null);
     const [linkAlbumCopiado, setLinkAlbumCopiado] = useState(false);
 
     const carregarAlbum = useCallback(async () => {
-        const token =localStorage.getItem("token");
+        const token = localStorage.getItem("token");
         if (!token) {
             router.push("/login");
             return;
@@ -166,7 +203,7 @@ export default function PainelEventoPage() {
 
         try {
             const res = await fetch(`/api/events/${slug}/album`, {
-                headers: { Authorization: `Bearer ${token}`},
+                headers: { Authorization: `Bearer ${token}` },
             });
 
             if (res.status === 401) {
@@ -246,40 +283,7 @@ export default function PainelEventoPage() {
             setErroAlbum("Não foi possível copiar o link.");
         }
     }
-
-    async function moderar(id: string, novoStatus: "approved" | "rejected") {
-        const token = localStorage.getItem("token");
-        if (!token) {
-            router.push("/login");
-            return;
-        }
-
-        setModerandoId(id);
-        setErroMidias(null);
-        try {
-            const res = await fetch(`/api/media/${id}`, {
-                method: "PATCH",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify({ status: novoStatus }),
-            });
-
-            if (!res.ok) {
-                const data = await res.json();
-                setErroMidias(data.error || "Não foi possível atualizar a mídia.");
-                return;
-            }
-
-            setMidias((atual) => atual.filter((m) => m.id !== id));
-        } catch {
-            setErroMidias("Não foi possível conectar ao servidor.");
-        } finally {
-            setModerandoId(null);
-        }
-    }
-    // ---- Fim da moderação ----
+    // ---- Fim do álbum ----
 
     async function mudarStatus(acao: "start" | "end") {
         const token = localStorage.getItem("token");
@@ -326,6 +330,16 @@ export default function PainelEventoPage() {
         } catch {
             setErro("Não foi possível copiar. Selecione o link e copie manualmente.");
         }
+    }
+
+    function baixarQrCode() {
+        const canvas = document.getElementById("qr-convidados") as HTMLCanvasElement | null;
+        if (!canvas) return;
+
+        const a = document.createElement("a");
+        a.href = canvas.toDataURL("image/png");
+        a.download = `qrcode-${slug}.png`;
+        a.click();
     }
 
     if (carregando) {
@@ -418,7 +432,7 @@ export default function PainelEventoPage() {
                     )}
 
                     {evento.status === "album_ready" && (
-                        <p className="mt-6 text-sm text-ink/70">O álbum deste evento já foi gerado.</p>
+                        <p className="mt-6 text-sm text-ink/70">Seu álbum está pronto. Assista abaixo.</p>
                     )}
                 </div>
 
@@ -433,6 +447,30 @@ export default function PainelEventoPage() {
                     >
                         {linkCopiado ? "Link copiado!" : "Copiar link"}
                     </button>
+
+                    <div className="mt-6 border-t border-gold/40 pt-6">
+                        <p className="text-sm text-ink/80">QR code para os convidados</p>
+                        <p className="mt-1 text-xs text-ink/60">
+                            Imprima ou mostre num telão. Ao apontar a câmera do celular, o convidado abre a página de envio.
+                        </p>
+                        <div className="mt-4 inline-block rounded-md bg-white p-2">
+                            <QRCodeCanvas
+                                id="qr-convidados"
+                                value={linkConvidados}
+                                size={1024}
+                                marginSize={2}
+                                style={{ width: 192, height: 192 }}
+                            />
+                        </div>
+                        <div>
+                            <button
+                                onClick={baixarQrCode}
+                                className="mt-3 rounded-md border border-navy px-4 py-2 text-sm font-medium text-navy transition-colors hover:bg-navy/10"
+                            >
+                                Baixar QR code
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 {(evento.status === "live" || evento.status === "ended") && (
@@ -535,6 +573,7 @@ export default function PainelEventoPage() {
                         </div>
                     </div>
                 )}
+
                 {(evento.status === "ended" || evento.status === "album_ready") && (
                     <div className="mt-6 rounded-lg bg-surface p-8">
                         <p className="font-display text-xl text-ink">Álbum</p>
@@ -594,3 +633,4 @@ export default function PainelEventoPage() {
         </main>
     );
 }
+
