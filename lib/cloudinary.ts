@@ -21,7 +21,7 @@ export function urlCloudinaryValida(
 }
 
 function comTransformacao(url: string, transformacao: string): string {
-    return url.replace("/upload",`/upload/${transformacao}/`);
+    return url.replace("/upload/", `/upload/${transformacao}/`);
 }
 
 export function fotoParaAlbum(url: string): string{

@@ -24,7 +24,12 @@ const FILTROS_VIDEO = [
     "format=yuv420p",
 ];
 
-const SILENCIO = "anullsrc=r=44100:cl=stereo";
+const CADEIA_VIDEO = FILTROS_VIDEO.join(",");
+
+// Áudio silencioso gerado DENTRO do filtro (sem "-f lavfi" na entrada).
+// A fluent-ffmpeg bloqueia qualquer "-f lavfi" por causa de um bug na leitura
+// da lista de formatos dos FFmpeg novos; como filtro, isso não acontece.
+const SILENCIO_FILTRO = "anullsrc=r=44100:cl=stereo";
 
 export async function generateAlbumVideo(
     mediaFiles: MediaFile[],
@@ -62,15 +67,17 @@ function fotoParaClipe(imagePath: string, outputPath: string): Promise<void> {
     const comando = ffmpeg()
         .input(imagePath)
         .inputOptions(["-loop 1"])
-        .input(SILENCIO)
-        .inputFormat("lavfi")
-        .videoFilters(FILTROS_VIDEO)
         .outputOptions([
+            "-filter_complex",
+            `[0:v]${CADEIA_VIDEO}[v];${SILENCIO_FILTRO}[a]`,
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
             `-t ${SEGUNDOS_POR_FOTO}`,
             "-c:v libx264",
             "-c:a aac",
             "-b:a 128k",
-            "-shortest",
             "-movflags +faststart",
         ]);
 
@@ -82,21 +89,36 @@ async function videoParaClipe(videoPath: string, outputPath: string): Promise<vo
 
     const comando = ffmpeg().input(videoPath);
 
-    // Vídeo sem áudio ganha silêncio, senão o concat final perde sincronismo.
-    if (!comAudio) {
-        comando.input(SILENCIO).inputFormat("lavfi");
+    if (comAudio) {
+        comando.videoFilters(FILTROS_VIDEO).outputOptions([
+            `-t ${SEGUNDOS_MAXIMOS_POR_VIDEO}`,
+            "-c:v libx264",
+            "-c:a aac",
+            "-ar 44100",
+            "-ac 2",
+            "-b:a 128k",
+            "-movflags +faststart",
+        ]);
+    } else {
+        // Vídeo sem áudio ganha silêncio, senão o concat final perde sincronismo.
+        // O "-shortest" corta o silêncio (infinito) quando o vídeo termina.
+        comando.outputOptions([
+            "-filter_complex",
+            `[0:v]${CADEIA_VIDEO}[v];${SILENCIO_FILTRO}[a]`,
+            "-map",
+            "[v]",
+            "-map",
+            "[a]",
+            "-shortest",
+            `-t ${SEGUNDOS_MAXIMOS_POR_VIDEO}`,
+            "-c:v libx264",
+            "-c:a aac",
+            "-ar 44100",
+            "-ac 2",
+            "-b:a 128k",
+            "-movflags +faststart",
+        ]);
     }
-
-    comando.videoFilters(FILTROS_VIDEO).outputOptions([
-        `-t ${SEGUNDOS_MAXIMOS_POR_VIDEO}`,
-        "-c:v libx264",
-        "-c:a aac",
-        "-ar 44100",
-        "-ac 2",
-        "-b:a 128k",
-        ...(comAudio ? [] : ["-map 0:v:0", "-map 1:a:0", "-shortest"]),
-        "-movflags +faststart",
-    ]);
 
     return executar(comando, outputPath);
 }

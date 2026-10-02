@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { miniaturaFoto, miniaturaVideo } from "@/lib/cloudinary";
-
 interface Evento {
     id: string;
     nomeEvento: string;
@@ -34,6 +33,12 @@ interface Midia {
 }
 
 type AbaStatus = "pending" | "approved" | "rejected";
+
+interface Album {
+    id: string;
+    videoFinalUrl: string | null;
+    status: string;
+}
 
 const abasLabels: Record<AbaStatus, string> = {
     pending: "Pendentes",
@@ -147,6 +152,101 @@ export default function PainelEventoPage() {
         }
     }, [statusEvento, carregarMidias]);
 
+    const [album, setAlbum] = useState<Album | null>(null);
+    const [gerandoAlbum, setGerandoAlbum] = useState(false);
+    const [erroAlbum, setErroAlbum] = useState<string | null>(null);
+    const [linkAlbumCopiado, setLinkAlbumCopiado] = useState(false);
+
+    const carregarAlbum = useCallback(async () => {
+        const token =localStorage.getItem("token");
+        if (!token) {
+            router.push("/login");
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/events/${slug}/album`, {
+                headers: { Authorization: `Bearer ${token}`},
+            });
+
+            if (res.status === 401) {
+                localStorage.removeItem("token");
+                localStorage.removeItem("couple");
+                router.push("/login");
+                return;
+            }
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                setErroAlbum(data.error || "Não foi possível carregar o álbum.");
+                return;
+            }
+
+            setAlbum(data);
+        } catch {
+            setErroAlbum("Não foi possível conectar ao servidor.");
+        }
+    }, [router, slug]);
+
+    useEffect(() => {
+        if (statusEvento === "album_ready") {
+            carregarAlbum();
+        }
+    }, [statusEvento, carregarAlbum]);
+
+    async function gerarAlbum() {
+        const token = localStorage.getItem("token");
+        if (!token) {
+            router.push("/login");
+            return;
+        }
+
+        const confirmou = window.confirm(
+            "Gerar o álbum agora? Depois de gerado, não será possível alterar as mídias aprovadas."
+        );
+        if (!confirmou) return;
+
+        setGerandoAlbum(true);
+        setErroAlbum(null);
+        try {
+            const res = await fetch(`/api/events/${slug}/album`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${token}` },
+            });
+
+            if (res.status === 401) {
+                localStorage.removeItem("token");
+                localStorage.removeItem("couple");
+                router.push("/login");
+                return;
+            }
+
+            if (!res.ok) {
+                const data = await res.json();
+                setErroAlbum(data.error || "Não foi possível gerar o álbum.");
+                return;
+            }
+
+            await carregarEvento();
+        } catch {
+            setErroAlbum("Não foi possível conectar ao servidor.");
+        } finally {
+            setGerandoAlbum(false);
+        }
+    }
+
+    async function copiarLinkAlbum() {
+        if (!album?.videoFinalUrl) return;
+        try {
+            await navigator.clipboard.writeText(album.videoFinalUrl);
+            setLinkAlbumCopiado(true);
+            setTimeout(() => setLinkAlbumCopiado(false), 2000);
+        } catch {
+            setErroAlbum("Não foi possível copiar o link.");
+        }
+    }
+
     async function moderar(id: string, novoStatus: "approved" | "rejected") {
         const token = localStorage.getItem("token");
         if (!token) {
@@ -250,6 +350,9 @@ export default function PainelEventoPage() {
     }
 
     const linkConvidados = `${typeof window !== "undefined" ? window.location.origin : ""}/e/${evento.slugPublico}`;
+    const urlDownloadAlbum = album?.videoFinalUrl
+        ? album.videoFinalUrl.replace("/upload/", "/upload/fl_attachment/")
+        : null;
 
     return (
         <main className="min-h-screen bg-background px-6 py-12">
@@ -430,6 +533,61 @@ export default function PainelEventoPage() {
                                 );
                             })}
                         </div>
+                    </div>
+                )}
+                {(evento.status === "ended" || evento.status === "album_ready") && (
+                    <div className="mt-6 rounded-lg bg-surface p-8">
+                        <p className="font-display text-xl text-ink">Álbum</p>
+
+                        {erroAlbum && <p className="mt-4 text-sm text-red-600">{erroAlbum}</p>}
+
+                        {evento.status === "ended" && (
+                            <div className="mt-2">
+                                <p className="text-sm text-ink/70">
+                                    Quando terminar a moderação, gere o álbum com as mídias aprovadas.
+                                </p>
+                                {gerandoAlbum && (
+                                    <p className="mt-3 text-sm text-ink/70">
+                                        Gerando o álbum... Isso pode levar alguns minutos. Não feche nem recarregue esta página.
+                                    </p>
+                                )}
+                                <button
+                                    onClick={gerarAlbum}
+                                    disabled={gerandoAlbum}
+                                    className="mt-3 rounded-md bg-navy px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-dark disabled:opacity-60"
+                                >
+                                    {gerandoAlbum ? "Gerando..." : "Gerar álbum"}
+                                </button>
+                            </div>
+                        )}
+
+                        {evento.status === "album_ready" && !album && !erroAlbum && (
+                            <p className="mt-4 text-sm text-ink/60">Carregando álbum...</p>
+                        )}
+
+                        {evento.status === "album_ready" && album?.videoFinalUrl && (
+                            <div className="mt-4">
+                                <video
+                                    src={album.videoFinalUrl}
+                                    controls
+                                    className="w-full rounded-lg bg-black"
+                                />
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                    <a
+                                        href={urlDownloadAlbum ?? album.videoFinalUrl}
+                                        className="rounded-md bg-navy px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-dark"
+                                    >
+                                        Baixar vídeo
+                                    </a>
+                                    <button
+                                        onClick={copiarLinkAlbum}
+                                        className="rounded-md border border-navy px-4 py-2 text-sm font-medium text-navy transition-colors hover:bg-navy/10"
+                                    >
+                                        {linkAlbumCopiado ? "Link copiado!" : "Copiar link do vídeo"}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
