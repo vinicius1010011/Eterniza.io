@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { miniaturaFoto, miniaturaVideo } from "@/lib/cloudinary";
 
 interface Evento {
     id: string;
@@ -18,6 +19,26 @@ const statusLabels: Record<string, string> = {
     ended: "Encerrado",
     album_processing: "Gerando álbum",
     album_ready: "Álbum pronto",
+};
+
+interface Midia {
+    id: string;
+    tipo: "photo" | "video";
+    storageUrl: string;
+    thumbnailUrl: string | null;
+    musicaTitulo: string | null;
+    musicaArtista: string | null;
+    mensagemTexto: string | null;
+    status: "pending" | "approved" | "rejected";
+    criadoEm: string;
+}
+
+type AbaStatus = "pending" | "approved" | "rejected";
+
+const abasLabels: Record<AbaStatus, string> = {
+    pending: "Pendentes",
+    approved: "Aprovadas",
+    rejected: "Rejeitadas",
 };
 
 export default function PainelEventoPage() {
@@ -73,7 +94,92 @@ export default function PainelEventoPage() {
 
     useEffect(() => {
         carregarEvento();
-    }, [carregarEvento])
+    }, [carregarEvento]);
+
+    // ---- Moderação (hooks precisam ficar antes dos returns condicionais) ----
+    const [aba, setAba] = useState<AbaStatus>("pending");
+    const [midias, setMidias] = useState<Midia[]>([]);
+    const [carregandoMidias, setCarregandoMidias] = useState(false);
+    const [erroMidias, setErroMidias] = useState<string | null>(null);
+    const [moderandoId, setModerandoId] = useState<string | null>(null);
+
+    const statusEvento = evento?.status;
+
+    const carregarMidias = useCallback(async () => {
+        const token = localStorage.getItem("token");
+        if (!token) {
+            router.push("/login");
+            return;
+        }
+
+        setCarregandoMidias(true);
+        setErroMidias(null);
+        try {
+            const res = await fetch(`/api/events/${slug}/media?status=${aba}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+
+            if (res.status === 401) {
+                localStorage.removeItem("token");
+                localStorage.removeItem("couple");
+                router.push("/login");
+                return;
+            }
+
+            const data = await res.json();
+
+            if (!Array.isArray(data)) {
+                setErroMidias(data.error || "Não foi possível carregar as mídias.");
+                return;
+            }
+
+            setMidias(data);
+        } catch {
+            setErroMidias("Não foi possível conectar ao servidor.");
+        } finally {
+            setCarregandoMidias(false);
+        }
+    }, [router, slug, aba]);
+
+    useEffect(() => {
+        if (statusEvento === "live" || statusEvento === "ended") {
+            carregarMidias();
+        }
+    }, [statusEvento, carregarMidias]);
+
+    async function moderar(id: string, novoStatus: "approved" | "rejected") {
+        const token = localStorage.getItem("token");
+        if (!token) {
+            router.push("/login");
+            return;
+        }
+
+        setModerandoId(id);
+        setErroMidias(null);
+        try {
+            const res = await fetch(`/api/media/${id}`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({ status: novoStatus }),
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                setErroMidias(data.error || "Não foi possível atualizar a mídia.");
+                return;
+            }
+
+            setMidias((atual) => atual.filter((m) => m.id !== id));
+        } catch {
+            setErroMidias("Não foi possível conectar ao servidor.");
+        } finally {
+            setModerandoId(null);
+        }
+    }
+    // ---- Fim da moderação ----
 
     async function mudarStatus(acao: "start" | "end") {
         const token = localStorage.getItem("token");
@@ -204,7 +310,7 @@ export default function PainelEventoPage() {
 
                     {evento.status === "ended" && (
                         <p className="mt-6 text-sm text-ink/70">
-                            O evento foi encerrado. Em breve você poderá moderar as mídias e gerar o álbum aqui.
+                            O evento foi encerrado. Modere as mídias abaixo antes de gerar o álbum.
                         </p>
                     )}
 
@@ -225,6 +331,107 @@ export default function PainelEventoPage() {
                         {linkCopiado ? "Link copiado!" : "Copiar link"}
                     </button>
                 </div>
+
+                {(evento.status === "live" || evento.status === "ended") && (
+                    <div className="mt-6 rounded-lg bg-surface p-8">
+                        <p className="font-display text-xl text-ink">Moderação</p>
+                        <p className="mt-1 text-sm text-ink/60">
+                            Só as mídias aprovadas entram no álbum.
+                        </p>
+
+                        <div className="mt-5 flex gap-2 border-b border-gold/40 pb-4">
+                            {(Object.keys(abasLabels) as AbaStatus[]).map((chave) => (
+                                <button
+                                    key={chave}
+                                    onClick={() => setAba(chave)}
+                                    className={
+                                        aba === chave
+                                            ? "rounded-full bg-navy px-4 py-1.5 text-sm font-medium text-white"
+                                            : "rounded-full bg-navy/10 px-4 py-1.5 text-sm font-medium text-navy hover:bg-navy/20"
+                                    }
+                                >
+                                    {abasLabels[chave]}
+                                </button>
+                            ))}
+                        </div>
+
+                        {erroMidias && <p className="mt-4 text-sm text-red-600">{erroMidias}</p>}
+
+                        {carregandoMidias && (
+                            <p className="mt-4 text-sm text-ink/60">Carregando mídias...</p>
+                        )}
+
+                        {!carregandoMidias && !erroMidias && midias.length === 0 && (
+                            <p className="mt-4 text-sm text-ink/60">Nenhuma mídia nesta aba.</p>
+                        )}
+
+                        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            {midias.map((midia) => {
+                                const miniatura =
+                                    midia.thumbnailUrl ||
+                                    (midia.tipo === "photo"
+                                        ? miniaturaFoto(midia.storageUrl)
+                                        : miniaturaVideo(midia.storageUrl));
+
+                                return (
+                                    <div key={midia.id} className="overflow-hidden rounded-lg bg-background">
+                                        <img
+                                            src={miniatura}
+                                            alt="Mídia enviada por um convidado"
+                                            className="aspect-square w-full object-cover"
+                                        />
+                                        <div className="p-3">
+                                            <p className="text-xs font-medium text-navy">
+                                                {midia.tipo === "photo" ? "Foto" : "Vídeo"}
+                                                {midia.tipo === "video" && (
+                                                    <a
+                                                        href={midia.storageUrl}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="ml-2 underline"
+                                                    >
+                                                        Assistir
+                                                    </a>
+                                                )}
+                                            </p>
+
+                                            {midia.mensagemTexto && (
+                                                <p className="mt-2 text-sm text-ink">{midia.mensagemTexto}</p>
+                                            )}
+
+                                            {(midia.musicaTitulo || midia.musicaArtista) && (
+                                                <p className="mt-1 text-xs text-ink/60">
+                                                    {[midia.musicaTitulo, midia.musicaArtista].filter(Boolean).join(" - ")}
+                                                </p>
+                                            )}
+
+                                            <div className="mt-3 flex gap-2">
+                                                {midia.status !== "approved" && (
+                                                    <button
+                                                        onClick={() => moderar(midia.id, "approved")}
+                                                        disabled={moderandoId === midia.id}
+                                                        className="flex-1 rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-navy-dark disabled:opacity-60"
+                                                    >
+                                                        Aprovar
+                                                    </button>
+                                                )}
+                                                {midia.status !== "rejected" && (
+                                                    <button
+                                                        onClick={() => moderar(midia.id, "rejected")}
+                                                        disabled={moderandoId === midia.id}
+                                                        className="flex-1 rounded-md border border-navy px-3 py-1.5 text-sm font-medium text-navy transition-colors hover:bg-navy/10 disabled:opacity-60"
+                                                    >
+                                                        Rejeitar
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
             </div>
         </main>
     );
