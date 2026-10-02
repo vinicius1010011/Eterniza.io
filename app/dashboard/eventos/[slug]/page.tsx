@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -58,6 +59,7 @@ export default function PainelEventoPage() {
     const [erro, setErro] = useState<string | null>(null);
     const [acaoEmAndamento, setAcaoEmAndamento] = useState(false);
     const [linkCopiado, setLinkCopiado] = useState(false);
+    const [agradecimento, setAgradecimento] = useState(false);
 
     const carregarEvento = useCallback(async () => {
         const token = localStorage.getItem("token");
@@ -314,6 +316,9 @@ export default function PainelEventoPage() {
             }
 
             await carregarEvento();
+            if (acao === "end") {
+                setAgradecimento(true);
+            }
         } catch {
             setErro("Não foi possível conectar ao servidor.");
         } finally {
@@ -358,6 +363,33 @@ export default function PainelEventoPage() {
                     <a href="/dashboard" className="mt-4 inline-block text-sm text-navy hover:underline">
                         Voltar para meus eventos
                     </a>
+                </div>
+            </main>
+        );
+    }
+
+    if (agradecimento) {
+        return (
+            <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
+                <div className="mx-auto max-w-md rounded-lg bg-surface p-10 text-center">
+                    <p className="font-logo text-3xl font-bold text-ink">Eterniza.io</p>
+                    <div className="mx-auto mt-4 h-px w-16 bg-gold" />
+
+                    <h1 className="mt-6 font-display text-2xl text-ink">Evento encerrado. Obrigado!</h1>
+                    <p className="mt-4 text-sm text-ink/70">
+                        Obrigado por usar o Eterniza.io para eternizar {evento.nomeEvento}.
+                    </p>
+                    <p className="mt-3 text-sm text-ink/70">
+                        Agora é só revisar as mídias recebidas e gerar o álbum aqui no painel. Ele será
+                        montado em vídeo com tudo o que você aprovar.
+                    </p>
+
+                    <button
+                        onClick={() => setAgradecimento(false)}
+                        className="mt-8 rounded-md bg-navy px-6 py-3 font-medium text-white transition-colors hover:bg-navy-dark"
+                    >
+                        Continuar
+                    </button>
                 </div>
             </main>
         );
