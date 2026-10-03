@@ -69,7 +69,7 @@ model GuestSession {
 
   mediaPosts MediaPost[]
 
-  @@map("guest_sessions")
+  @@map("guest_session")
 }
 
 model MediaPost {
@@ -97,7 +97,7 @@ model MediaPost {
   criadoEm DateTime @default(now()) @map("criado_em")
 
   @@index([eventId, status])
-  @@map("media_posts")
+  @@map("media_post")
 }
 
 model Album {
