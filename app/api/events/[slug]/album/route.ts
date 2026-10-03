@@ -1,27 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "../../../../../lib/prisma";
-import { getCoupleIdFromRequest } from "../../../../../lib/auth";
-import { downloadFile } from "../../../../../lib/downloadFile";
-import { generateAlbumVideo } from "../../../../../lib/generateAlbumVideo";
-import fs from "fs";
-import path from "path";
 import axios from "axios";
-import FormData from "form-data";
+import { prisma } from "@/lib/prisma";
+import { getCoupleIdFromRequest } from "@/lib/auth";
 import { fotoParaAlbum } from "@/lib/cloudinary";
+
+// Tempo máximo desta função na Vercel (dá folga caso o serviço de vídeo esteja "dormindo")
+export const maxDuration = 60;
+
+// Se o álbum ficar "gerando" por mais que isso, consideramos que falhou
+const MINUTOS_LIMITE_GERACAO = 20;
+
 export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ slug: string }> }
 ) {
-    let tempDir: string | null = null;
-
     try {
         const coupleId = getCoupleIdFromRequest(request);
 
         if (!coupleId) {
-            return NextResponse.json(
-                { error: "Não autenticado" },
-                { status: 401 }
-            );
+            return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
         }
 
         const { slug } = await params;
@@ -31,16 +28,20 @@ export async function POST(
         });
 
         if (!event) {
-            return NextResponse.json(
-                { error: "Evento não encontrado" },
-                { status: 404 }
-            );
+            return NextResponse.json({ error: "Evento não encontrado" }, { status: 404 });
         }
 
         if (event.coupleId !== coupleId) {
             return NextResponse.json(
                 { error: "Você não tem permissão para gerar o álbum deste evento" },
                 { status: 403 }
+            );
+        }
+
+        if (event.status === "album_processing") {
+            return NextResponse.json(
+                { error: "O álbum já está sendo gerado. Aguarde." },
+                { status: 400 }
             );
         }
 
@@ -63,71 +64,77 @@ export async function POST(
             );
         }
 
-        tempDir = path.join(process.cwd(), "temp", `album-${event.id}`);
-        fs.mkdirSync(tempDir, { recursive: true });
+        const workerUrl = process.env.WORKER_URL;
+        const workerSecret = process.env.WORKER_SECRET;
+        const appUrl = process.env.APP_URL;
 
-        const mediaFiles = [];
-
-        for (let i = 0; i < mediaPosts.length; i++) {
-            const post = mediaPosts[i];
-            const extensao = post.tipo === "photo" ? "jpg" : "mp4";
-            const localPath = path.join(tempDir, `original-${i}.${extensao}`);
-            const url = post.tipo === "photo" ? fotoParaAlbum(post.storageUrl) : post.storageUrl;
-            await downloadFile(url, localPath);
-
-            mediaFiles.push({ filePath: localPath, tipo: post.tipo });
+        if (!workerUrl || !workerSecret || !appUrl) {
+            console.error("Faltam variáveis de ambiente: WORKER_URL, WORKER_SECRET ou APP_URL");
+            return NextResponse.json(
+                { error: "Serviço de vídeo não configurado" },
+                { status: 500 }
+            );
         }
 
-        const outputPath = path.join(tempDir, "album-final.mp4");
-        await generateAlbumVideo(mediaFiles, outputPath);
-
-        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-        const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET;
-
-        const form = new FormData();
-        form.append("file", fs.createReadStream(outputPath));
-        form.append("upload_preset", uploadPreset as string);
-
-        const uploadResponse = await axios.post(
-            `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
-            form,
-            {
-                headers: form.getHeaders(),
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity,
-            }
-        );
-
-        const videoFinalUrl = uploadResponse.data.secure_url;
-
-        const album = await prisma.album.create({
-            data: {
-                eventId: event.id,
-                videoFinalUrl,
-                status: "ready",
-                finalizadoEm: new Date(),
+        // Marca como "gerando" ANTES de chamar o serviço de vídeo.
+        // upsert: cria o álbum na primeira vez e reaproveita em novas tentativas.
+        await prisma.album.upsert({
+            where: { eventId: event.id },
+            create: { eventId: event.id, status: "processing" },
+            update: {
+                status: "processing",
+                erro: null,
+                videoFinalUrl: null,
+                finalizadoEm: null,
+                criadoEm: new Date(),
             },
         });
 
         await prisma.event.update({
             where: { id: event.id },
-            data: { status: "album_ready" },
+            data: { status: "album_processing" },
         });
 
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        const media = mediaPosts.map((post) => ({
+            tipo: post.tipo,
+            url: post.tipo === "photo" ? fotoParaAlbum(post.storageUrl) : post.storageUrl,
+        }));
 
-        return NextResponse.json(album, { status: 201 });
-    } catch (error) {
-        console.error(error);
+        try {
+            await axios.post(
+                `${workerUrl}/generate`,
+                {
+                    eventId: event.id,
+                    callbackUrl: `${appUrl}/api/internal/album-callback`,
+                    media,
+                },
+                {
+                    headers: { "x-worker-secret": workerSecret },
+                    timeout: 55_000,
+                }
+            );
+        } catch (error) {
+            console.error("Falha ao acionar o serviço de vídeo:", error);
 
-        if (tempDir && fs.existsSync(tempDir)) {
-            fs.rmSync(tempDir, { recursive: true, force: true });
+            await prisma.album.update({
+                where: { eventId: event.id },
+                data: { status: "error", erro: "Não foi possível acionar o serviço de vídeo." },
+            });
+            await prisma.event.update({
+                where: { id: event.id },
+                data: { status: "ended" },
+            });
+
+            return NextResponse.json(
+                { error: "Não foi possível iniciar a geração do álbum. Tente novamente em instantes." },
+                { status: 502 }
+            );
         }
 
-        return NextResponse.json(
-            { error: "Erro ao gerar álbum" },
-            { status: 500 }
-        );
+        return NextResponse.json({ status: "processing" }, { status: 202 });
+    } catch (error) {
+        console.error(error);
+        return NextResponse.json({ error: "Erro ao gerar álbum" }, { status: 500 });
     }
 }
 
@@ -139,10 +146,7 @@ export async function GET(
         const coupleId = getCoupleIdFromRequest(request);
 
         if (!coupleId) {
-            return NextResponse.json(
-                { error: "Não autenticado" },
-                { status: 401 }
-            );
+            return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
         }
 
         const { slug } = await params;
@@ -153,10 +157,7 @@ export async function GET(
         });
 
         if (!event) {
-            return NextResponse.json(
-                { error: "Evento não encontrado" },
-                { status: 404 }
-            );
+            return NextResponse.json({ error: "Evento não encontrado" }, { status: 404 });
         }
 
         if (event.coupleId !== coupleId) {
@@ -173,12 +174,28 @@ export async function GET(
             );
         }
 
-        return NextResponse.json(event.album, { status: 200 });
+        let album = event.album;
+
+        // Proteção: se travou (ex.: o serviço de vídeo caiu no meio), libera nova tentativa.
+        if (event.status === "album_processing" && album.status === "processing") {
+            const minutos = (Date.now() - album.criadoEm.getTime()) / 60000;
+
+            if (minutos > MINUTOS_LIMITE_GERACAO) {
+                album = await prisma.album.update({
+                    where: { eventId: event.id },
+                    data: { status: "error", erro: "A geração demorou demais. Tente novamente." },
+                });
+                await prisma.event.update({
+                    where: { id: event.id },
+                    data: { status: "ended" },
+                });
+            }
+        }
+
+        return NextResponse.json(album, { status: 200 });
     } catch (error) {
         console.error(error);
-        return NextResponse.json(
-            { error: "Erro ao buscar álbum" },
-            { status: 500 }
-        );
+        return NextResponse.json({ error: "Erro ao buscar álbum" }, { status: 500 });
     }
 }
+

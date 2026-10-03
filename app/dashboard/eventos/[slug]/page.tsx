@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -41,6 +40,7 @@ interface Album {
     id: string;
     videoFinalUrl: string | null;
     status: string;
+    erro: string | null;
 }
 
 const abasLabels: Record<AbaStatus, string> = {
@@ -215,6 +215,11 @@ export default function PainelEventoPage() {
                 return;
             }
 
+            if (res.status === 404) {
+                setAlbum(null);
+                return;
+            }
+
             const data = await res.json();
 
             if (!res.ok) {
@@ -229,10 +234,26 @@ export default function PainelEventoPage() {
     }, [router, slug]);
 
     useEffect(() => {
-        if (statusEvento === "album_ready") {
+        if (
+            statusEvento === "ended" ||
+            statusEvento === "album_processing" ||
+            statusEvento === "album_ready"
+        ) {
             carregarAlbum();
         }
     }, [statusEvento, carregarAlbum]);
+
+    // Enquanto o álbum está sendo gerado, consulta o andamento a cada 5 segundos
+    useEffect(() => {
+        if (statusEvento !== "album_processing") return;
+
+        const intervalo = setInterval(() => {
+            carregarEvento();
+            carregarAlbum();
+        }, 5000);
+
+        return () => clearInterval(intervalo);
+    }, [statusEvento, carregarEvento, carregarAlbum]);
 
     async function gerarAlbum() {
         const token = localStorage.getItem("token");
@@ -463,6 +484,12 @@ export default function PainelEventoPage() {
                         </p>
                     )}
 
+                    {evento.status === "album_processing" && (
+                        <p className="mt-6 text-sm text-ink/70">
+                            Estamos montando o seu álbum. Isso pode levar alguns minutos.
+                        </p>
+                    )}
+
                     {evento.status === "album_ready" && (
                         <p className="mt-6 text-sm text-ink/70">Seu álbum está pronto. Assista abaixo.</p>
                     )}
@@ -606,7 +633,9 @@ export default function PainelEventoPage() {
                     </div>
                 )}
 
-                {(evento.status === "ended" || evento.status === "album_ready") && (
+                {(evento.status === "ended" ||
+                    evento.status === "album_processing" ||
+                    evento.status === "album_ready") && (
                     <div className="mt-6 rounded-lg bg-surface p-8">
                         <p className="font-display text-xl text-ink">Álbum</p>
 
@@ -617,10 +646,14 @@ export default function PainelEventoPage() {
                                 <p className="text-sm text-ink/70">
                                     Quando terminar a moderação, gere o álbum com as mídias aprovadas.
                                 </p>
-                                {gerandoAlbum && (
-                                    <p className="mt-3 text-sm text-ink/70">
-                                        Gerando o álbum... Isso pode levar alguns minutos. Não feche nem recarregue esta página.
+                                {album?.status === "error" && !gerandoAlbum && (
+                                    <p className="mt-3 text-sm text-red-600">
+                                        A última tentativa de gerar o álbum falhou
+                                        {album.erro ? `: ${album.erro}` : "."} Você pode tentar de novo.
                                     </p>
+                                )}
+                                {gerandoAlbum && (
+                                    <p className="mt-3 text-sm text-ink/70">Enviando o pedido...</p>
                                 )}
                                 <button
                                     onClick={gerarAlbum}
@@ -629,6 +662,15 @@ export default function PainelEventoPage() {
                                 >
                                     {gerandoAlbum ? "Gerando..." : "Gerar álbum"}
                                 </button>
+                            </div>
+                        )}
+
+                        {evento.status === "album_processing" && (
+                            <div className="mt-2">
+                                <p className="text-sm text-ink/70">
+                                    Gerando o álbum... Isso pode levar alguns minutos. Você pode sair desta página:
+                                    quando o álbum ficar pronto, ele aparece aqui.
+                                </p>
                             </div>
                         )}
 
