@@ -194,14 +194,17 @@ export default function GuestPage({
                             <label htmlFor="arquivo" className="text-sm text-ink/80">
                                 Foto ou vídeo
                             </label>
-                            <input
-                                id="arquivo"
-                                type="file"
-                                accept="image/*,video/*"
-                                required
-                                onChange={(e) => setArquivo(e.target.files?.[0] || null)}
-                                className="text-sm text-ink/70"
-                            />
+                            <div className="rounded-lg border-2 border-dashed border-navy/30 bg-background p-4 transition-colors hover:border-navy/50">
+                                <input
+                                    id="arquivo"
+                                    type="file"
+                                    accept="image/*,video/*"
+                                    capture="environment"
+                                    required
+                                    onChange={(e) => setArquivo(e.target.files?.[0] || null)}
+                                    className="w-full text-sm text-ink/70 file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-navy file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-navy-dark"
+                                />
+                            </div>
                         </div>
 
                         <div className="flex flex-col gap-1.5">
